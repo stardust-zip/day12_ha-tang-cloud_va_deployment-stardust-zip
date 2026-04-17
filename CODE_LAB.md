@@ -760,7 +760,7 @@ Build một production-ready AI agent từ đầu, kết hợp TẤT CẢ concep
 - [ ] Deploy lên Railway hoặc Render
 - [ ] Public URL hoạt động
 
-### 🏗 Architecture
+### Architecture
 
 ```
 ┌─────────────┐

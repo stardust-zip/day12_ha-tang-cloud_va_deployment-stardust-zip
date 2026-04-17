@@ -22,6 +22,12 @@ services:
 
     autoDeploy: true           # Auto deploy khi push to GitHub
 
+    # IP Allow List — chỉ cho phép IP trong danh sách
+    # Lưu ý: Chỉ có trên Render Pro trở lên
+    # ipAllowList:
+    #   - 1.2.3.4/32           # Single IP
+    #   - 10.0.0.0/8          # CIDR block
+
     envVars:
       - key: ENVIRONMENT
         value: production
@@ -45,6 +51,7 @@ services:
   - type: redis
     name: agent-cache
     plan: free
+    ipAllowList: []
     maxmemoryPolicy: allkeys-lru
 
 # ============================================================

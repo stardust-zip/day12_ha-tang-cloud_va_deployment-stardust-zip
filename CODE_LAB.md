@@ -188,7 +188,7 @@ curl http://localhost:8000/ask -X POST \
   -d '{"question": "What is Docker?"}'
 ```
 
-**Quan sát:** Image size là bao nhiêu?
+**Quan sát:** Image size là bao nhiêu: 1.66GB (DISK USAGE)
 
 ```bash
 docker images my-agent:develop
@@ -202,9 +202,9 @@ cd ../production
 
 **Nhiệm vụ:** Đọc `Dockerfile` và tìm:
 
-- Stage 1 làm gì?
-- Stage 2 làm gì?
-- Tại sao image nhỏ hơn?
+- Stage 1 làm gì? → **Builder stage**: Cài đặt pip, gcc, libpq-dev + dependencies (cần để compile packages)
+- Stage 2 làm gì? → **Runtime stage**: Chỉ copy những gì cần để chạy (Python slim + site-packages + source code)
+- Tàì sao image nhỏ hơn? → Dùng `python:3.11-slim` thay vì `python:3.11` đầy đủ, không có build tools, chạy non-root user
 
 Build và so sánh:
 
@@ -212,6 +212,13 @@ Build và so sánh:
 docker build -t my-agent:advanced .
 docker images | grep my-agent
 ```
+
+| Image                             | DISK USAGE | CONTENT SIZE |
+| --------------------------------- | ---------- | ------------ |
+| `my-agent:develop` (basic)        | 1.66GB     | 424MB        |
+| `my-agent:advanced` (multi-stage) | 236MB      | 56.6MB       |
+
+→ **87% smaller** (1.66GB → 236MB)!
 
 ### Exercise 2.4: Docker Compose stack
 
@@ -221,26 +228,60 @@ docker images | grep my-agent
 docker compose up
 ```
 
-Services nào được start? Chúng communicate thế nào?
+**Services được start:**
 
-Test:
+| Service  | Image                          | Purpose                                     |
+| -------- | ------------------------------ | ------------------------------------------- |
+| `nginx`  | nginx:alpine                   | Reverse proxy, load balancer, rate limiting |
+| `agent`  | production-agent (multi-stage) | FastAPI AI agent                            |
+| `redis`  | redis:7-alpine                 | Session cache, rate limiting                |
+| `qdrant` | qdrant/qdrant:v1.9.0           | Vector database (RAG)                       |
+
+**Communication:**
+
+```
+Client → Nginx (port 80) → Agent (internal network)
+                     → Redis (cache/session)
+                     → Qdrant (vector DB)
+```
+
+**Architecture diagram:**
+
+```
+┌─────────────┐     ┌─────────────┐
+│   Client    │────▶│   Nginx     │ (LB, rate limit)
+└─────────────┘     └──────┬──────┘
+                           │
+                    ┌────────┼────────┐
+                    ▼        ▼        ▼
+               ┌──────┐  Agent (scale to N)
+               │Redis │  Cache
+               └──────┘
+               ┌──────┐
+               │Qdrant│  Vector DB
+               └──────┘
+```
+
+**Test:**
 
 ```bash
 # Health check
 curl http://localhost/health
+# {"status":"ok","uptime_seconds":5.2,"version":"2.0.0"}
 
 # Agent endpoint
 curl http://localhost/ask -X POST \
   -H "Content-Type: application/json" \
   -d '{"question": "Explain microservices"}'
+# {"answer":"Agent đang hoạt động tốt! (mock response)"}
 ```
 
 ### Checkpoint 2
 
-- [ ] Hiểu cấu trúc Dockerfile
-- [ ] Biết lợi ích của multi-stage builds
-- [ ] Hiểu Docker Compose orchestration
-- [ ] Biết cách debug container (`docker logs`, `docker exec`)
+- [x] Hiểu cấu trúc Dockerfile
+- [x] Biết lợi ích của multi-stage builds
+- [x] Hiểu Docker Compose orchestration
+- [x] Biết cách debug container (`docker logs`, `docker exec`)
 
 ---
 

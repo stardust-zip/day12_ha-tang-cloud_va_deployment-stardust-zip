@@ -29,6 +29,7 @@ pkgs.mkShell {
     basedpyright
     ruff
     black
+    railway
   ];
 
   # Uncomment if you're using Poetry - since we're using a Nix-provided `python`

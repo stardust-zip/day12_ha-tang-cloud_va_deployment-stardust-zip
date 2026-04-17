@@ -348,17 +348,27 @@ railway domain
 
 **Nhiệm vụ:** Test public URL với curl hoặc Postman.
 
-Test:
+Sau khi deploy thành công, chạy:
 
 ```bash
-# Health check
-curl http://student-agent-domain/health
+# Lấy domain
+ railway domain
+ # → day12-production.up.railway.app
 
-# Agent endpoint
-curl http://studen-agent-domain/ask -X POST \
+# Health check
+curl https://day12-production.up.railway.app/health
+ # → {"status":"ok","uptime_seconds":278.9,"platform":"Railway",...}
+
+# Agent endpoint (POST /ask)
+curl https://day12-production.up.railway.app/ask -X POST \
   -H "Content-Type: application/json" \
-  -d '{"question": ""}'
+  -d '{"question": "What is Docker?"}'
+ # → {"answer":"..."}
 ```
+
+- Dùng `https://` ( Railway tự cấp SSL)
+- PORT trên Railway mặc định là `8080`, không phải `8000`
+- Health check path là `/health` (platform dùng để kiểm tra)
 
 ### Exercise 3.2: Deploy Render (15 phút)
 

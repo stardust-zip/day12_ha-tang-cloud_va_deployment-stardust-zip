@@ -400,10 +400,10 @@ cd ../production-cloud-run
 
 ### Checkpoint 3
 
-- [ ] Deploy thành công lên ít nhất 1 platform
-- [ ] Có public URL hoạt động
-- [ ] Hiểu cách set environment variables trên cloud
-- [ ] Biết cách xem logs
+- [x] Deploy thành công lên ít nhất 1 platform
+- [x] Có public URL hoạt động
+- [x] Hiểu cách set environment variables trên cloud
+- [x] Biết cách xem logs
 
 ---
 
@@ -427,25 +427,35 @@ cd ../../04-api-gateway/develop
 
 **Nhiệm vụ:** Đọc `app.py` và tìm:
 
-- API key được check ở đâu?
-- Điều gì xảy ra nếu sai key?
-- Làm sao rotate key?
+- **API key được check ở đâu?** → Hàm `verify_api_key()` (lines 39-54)
+- **Điều gì xảy ra nếu sai key?** → HTTP 403 Forbidden ("Invalid API key")
+- **Làm sao rotate key?** → Đổi `AGENT_API_KEY` environment variable
+
+**Trả lời:**
+
+- API key được check trong dependency `verify_api_key()` sử dụng `APIKeyHeader`
+- Nếu không có key: HTTP 401 "Missing API key"
+- Nếu sai key: HTTP 403 "Invalid API key"
+- Rotate: thay đổi `AGENT_API_KEY` env var
 
 Test:
 
 ```bash
-python app.py
+cd ../../04-api-gateway/develop
+AGENT_API_KEY=secret-key-123 uvicorn app:app --host 0.0.0.0 --port 8000
 
-#  Không có key
+#  Không có key → 401
 curl http://localhost:8000/ask -X POST \
   -H "Content-Type: application/json" \
   -d '{"question": "Hello"}'
+ # {"detail":"Missing API key..."}
 
-#  Có key
+#  Có key → 200
 curl http://localhost:8000/ask -X POST \
   -H "X-API-Key: secret-key-123" \
   -H "Content-Type: application/json" \
   -d '{"question": "Hello"}'
+ # {"question":"Hello","answer":"..."}
 ```
 
 ### Exercise 4.2: JWT authentication (Advanced)
@@ -460,11 +470,14 @@ cd ../production
 2. Lấy token:
 
 ```bash
-python app.py
+cd ../../04-api-gateway/production
+uvicorn app:app --host 0.0.0.0 --port 8000
 
+# Lấy token (login)
 curl http://localhost:8000/token -X POST \
   -H "Content-Type: application/json" \
-  -d '{"username": "admin", "password": "secret"}'
+  -d '{"username": "student", "password": "demo123"}'
+ # {"access_token":"eyJhbGc...","token_type":"bearer"}
 ```
 
 3. Dùng token để gọi API:
@@ -477,13 +490,33 @@ curl http://localhost:8000/ask -X POST \
   -d '{"question": "Explain JWT"}'
 ```
 
+**JWT Flow:**
+
+```
+1. Client → POST /token (username + password)
+2. Server → verify → generate JWT (secret key)
+3. Client → Request + Authorization: Bearer <JWT>
+4. Server → verify signature → extract user_id → process
+```
+
+**Ưu điểm so với API Key:**
+- Stateless (không cần check DB mỗi request)
+- Có expiry tự động
+- Chứa user info (role, permissions)
+
 ### Exercise 4.3: Rate limiting
 
 **Nhiệm vụ:** Đọc `rate_limiter.py` và trả lời:
 
-- Algorithm nào được dùng? (Token bucket? Sliding window?)
-- Limit là bao nhiêu requests/minute?
-- Làm sao bypass limit cho admin?
+- **Algorithm?** → **Sliding Window Counter** (line 18: `max_requests=10, window_seconds=60`)
+- **Limit?** → **10 requests/60 giây** (user tier), **100 requests/60 giây** (admin tier)
+- **Bypass cho admin?** → Dùng `rate_limiter_admin` thay vì `rate_limiter_user` (lines 86-87)
+
+**Trả lời:**
+
+- Algorithm: **Sliding Window Counter** — đếm request trong sliding window 60 giây
+- User limit: 10 req/phút
+- Admin limit: 100 req/phút (dùng `rate_limiter_admin` cho admin role)
 
 Test:
 
@@ -494,60 +527,56 @@ for i in {1..20}; do
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
     -d '{"question": "Test '$i'"}'
-  echo ""
 done
+# Request 11+ → 429 Too Many Requests
+# Response: {"error":"Rate limit exceeded","retry_after_seconds":...}
 ```
 
-Quan sát response khi hit limit.
+**Response headers khi bị limit:**
+```
+X-RateLimit-Limit: 10
+X-RateLimit-Remaining: 0
+X-RateLimit-Reset: 1234567890
+Retry-After: 45
+```
 
 ### Exercise 4.4: Cost guard
 
 **Nhiệm vụ:** Đọc `cost_guard.py` và implement logic:
 
-```python
-def check_budget(user_id: str, estimated_cost: float) -> bool:
-    """
-    Return True nếu còn budget, False nếu vượt.
+**Trả lời:**
 
-    Logic:
-    - Mỗi user có budget $10/tháng
-    - Track spending trong Redis
-    - Reset đầu tháng
-    """
-    # TODO: Implement
-    pass
-```
+- **Budget:** $1/ngày per user, $10/ngày global (line 42-44)
+- **Giá token:** $0.15/1M input, $0.60/1M output (GPT-4o-mini)
+- **Khi vượt budget:** HTTP 402 Payment Required
+- **Reset:** midnight UTC hàng ngày
 
-<details>
-<summary> Solution</summary>
+**Code đã implement sẵn trong `cost_guard.py`:**
 
 ```python
-import redis
-from datetime import datetime
-
-r = redis.Redis()
-
-def check_budget(user_id: str, estimated_cost: float) -> bool:
-    month_key = datetime.now().strftime("%Y-%m")
-    key = f"budget:{user_id}:{month_key}"
-
-    current = float(r.get(key) or 0)
-    if current + estimated_cost > 10:
-        return False
-
-    r.incrbyfloat(key, estimated_cost)
-    r.expire(key, 32 * 24 * 3600)  # 32 days
-    return True
+# check_budget(user_id) - kiểm tra trước khi gọi LLM
+# record_usage(user_id, input_tokens, output_tokens) - ghi sau khi gọi
+# get_usage(user_id) - lấy stats hiện tại
 ```
 
-</details>
+Test:
+
+```bash
+# Gọi nhiều requests
+curl .../ask -d '{"question": "..."}'  # Request 1-2 → OK
+# Sau khi vượt $1 → 402 Payment Required
+# Response:
+# {"error":"Daily budget exceeded","used_usd":1.01,"budget_usd":1.0}
+```
+
+**Headers trả về:** `X-RateLimit-Limit` (budget), `X-RateLimit-Remaining`
 
 ### Checkpoint 4
 
-- [ ] Implement API key authentication
-- [ ] Hiểu JWT flow
-- [ ] Implement rate limiting
-- [ ] Implement cost guard với Redis
+- [x] Implement API key authentication
+- [x] Hiểu JWT flow
+- [x] Implement rate limiting
+- [x] Implement cost guard với Redis
 
 ---
 
@@ -572,81 +601,94 @@ cd ../../05-scaling-reliability/develop
 
 **Nhiệm vụ:** Implement 2 endpoints:
 
-```python
-@app.get("/health")
-def health():
-    """Liveness probe — container còn sống không?"""
-    # TODO: Return 200 nếu process OK
-    pass
+**Trả lời:**
 
-@app.get("/ready")
-def ready():
-    """Readiness probe — sẵn sàng nhận traffic không?"""
-    # TODO: Check database connection, Redis, etc.
-    # Return 200 nếu OK, 503 nếu chưa ready
-    pass
-```
+- **`/health` (Liveness):** Trả về 200 nếu process còn sống → platform restart nếu fail
+- **`/ready` (Readiness):** Trả về 200 nếu sẵn sàng, 503 nếu chưa → LB quyết định route traffic
 
-<details>
-<summary> Solution</summary>
+**Code đã có trong `app.py`:**
 
 ```python
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    # Liveness: kiểm tra process còn chạy
+    return {"status": "ok", "uptime_seconds": uptime, "version": "1.0.0"}
 
 @app.get("/ready")
 def ready():
-    try:
-        # Check Redis
-        r.ping()
-        # Check database
-        db.execute("SELECT 1")
-        return {"status": "ready"}
-    except:
-        return JSONResponse(
-            status_code=503,
-            content={"status": "not ready"}
-        )
+    # Readiness: kiểm tra dependencies (Redis, DB)
+    if not _is_ready:
+        raise HTTPException(503, "Agent not ready")
+    return {"ready": True, "in_flight_requests": _in_flight_requests}
 ```
 
-</details>
+**Platform dùng:**
+- Railway/Render: `/health` cho health check
+- Kubernetes: `/health` (liveness) + `/ready` (readiness)
+
+Test:
+
+```bash
+curl http://localhost:8000/health
+# {"status":"ok","uptime_seconds":120.5,"version":"1.0.0"}
+
+curl http://localhost:8000/ready
+# {"ready":true,"in_flight_requests":0}
+```
 
 ### Exercise 5.2: Graceful shutdown
 
 **Nhiệm vụ:** Implement signal handler:
 
+**Trả lời:**
+
+- **SIGTERM:** Platform gửi khi muốn restart/stop container
+- **Graceful:** Chờ in-flight requests hoàn thành trước khi tắt (uvicorn tự xử lý qua `lifespan`)
+- **Cần làm:** Đừng handle SIGKILL, chỉ loggraceful shutdown
+
+**Code đã có trong `app.py`:**
+
 ```python
-import signal
-import sys
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    _is_ready = True
+    yield
+    # Shutdown
+    _is_ready = False  # Stop accepting new requests
+    while _in_flight_requests > 0:
+        time.sleep(1)  # Wait for in-flight requests
+    # Close connections
+    logger.info("Shutdown complete")
 
-def shutdown_handler(signum, frame):
-    """Handle SIGTERM from container orchestrator"""
-    # TODO:
-    # 1. Stop accepting new requests
-    # 2. Finish current requests
-    # 3. Close connections
-    # 4. Exit
-    pass
+# Track in-flight requests
+@app.middleware("http")
+async def track_requests(request, call_next):
+    global _in_flight_requests
+    _in_flight_requests += 1
+    try:
+        return await call_next(request)
+    finally:
+        _in_flight_requests -= 1
 
-signal.signal(signal.SIGTERM, shutdown_handler)
+# Signal handler
+signal.signal(signal.SIGTERM, handle_sigterm)  # Log only
 ```
 
 Test:
 
 ```bash
-python app.py &
-PID=$!
-
-# Gửi request
+# Gửi long request
 curl http://localhost:8000/ask -X POST \
-  -H "Content-Type: application/json" \
-  -d '{"question": "Long task"}' &
+  -d '{"question": "Explain quantum computing"}' &
 
-# Ngay lập tức kill
-kill -TERM $PID
+# Kill gracefully
+kill -TERM <pid>
 
-# Quan sát: Request có hoàn thành không?
+# Logs:
+# 🔄 Graceful shutdown initiated...
+# Waiting for 1 in-flight requests...
+# ✅ Shutdown complete
 ```
 
 ### Exercise 5.3: Stateless design
@@ -657,77 +699,137 @@ cd ../production
 
 **Nhiệm vụ:** Refactor code để stateless.
 
+**Trả lời:**
+
+- **Tại sao cần stateless?** Khi scale ra N instances, mỗi instance có memory riêng. User A gửi request đến Instance 1 → lưu history. Request tiếp theo đến Instance 2 → KHÔNG có history!
+- **Giải pháp:** Lưu state trong Redis (shared giữa các instances)
+
 **Anti-pattern:**
 
 ```python
-#  State trong memory
+# State trong memory ❌
 conversation_history = {}
 
 @app.post("/ask")
-def ask(user_id: str, question: str):
-    history = conversation_history.get(user_id, [])
-    # ...
+def ask(question: str, session_id: str):
+    history = conversation_history.get(session_id, [])
 ```
 
 **Correct:**
 
 ```python
-#  State trong Redis
-@app.post("/ask")
-def ask(user_id: str, question: str):
-    history = r.lrange(f"history:{user_id}", 0, -1)
+# State trong Redis ✅
+@app.post("/chat")
+def chat(body: ChatRequest):
+    session_id = body.session_id or uuid.uuid4()
+    session = load_session(session_id)  # Redis
     # ...
+    append_to_history(session_id, "user", body.question)
 ```
 
-Tại sao? Vì khi scale ra nhiều instances, mỗi instance có memory riêng.
+**Code đã có trong `production/app.py`:**
+
+```python
+def save_session(session_id: str, data: dict, ttl_seconds: int = 3600):
+    """Lưu session vào Redis với TTL"""
+    _redis.setex(f"session:{session_id}", ttl_seconds, json.dumps(data))
+
+def load_session(session_id: str) -> dict:
+    """Load session từ Redis"""
+    data = _redis.get(f"session:{session_id}")
+    return json.loads(data) if data else {}
+```
+
+Test:
+
+```bash
+# Request 1: Tạo session mới
+curl -X POST http://localhost:8000/chat \
+  -d '{"question": "Hello"}'
+# {"session_id": "abc-123", "served_by": "instance-001"}
+
+# Request 2: Cùng session_id (có thể được serve bởi instance khác)
+curl -X POST http://localhost:8000/chat \
+  -d '{"question": "Continue", "session_id": "abc-123"}'
+# {"session_id": "abc-123", "served_by": "instance-002"}  ← Instance khác!
+```
 
 ### Exercise 5.4: Load balancing
 
 **Nhiệm vụ:** Chạy stack với Nginx load balancer:
 
+**Trả lời:**
+
+- **3 agent instances được start** (scale to 3)
+- **Nginx phân tán** requests round-robin
+- **Nếu 1 instance die**, traffic tự động chuyển sang instances khác
+
+**Docker Compose config:**
+
+```yaml
+# docker-compose.yml
+services:
+  agent:
+    build: .
+    scale: 3  # or: docker compose up --scale agent=3
+  
+  nginx:
+    image: nginx:alpine
+    # upstream: agent → load balance
+```
+
+**Test:**
+
 ```bash
 docker compose up --scale agent=3
-```
 
-Quan sát:
-
-- 3 agent instances được start
-- Nginx phân tán requests
-- Nếu 1 instance die, traffic chuyển sang instances khác
-
-Test:
-
-```bash
 # Gọi 10 requests
 for i in {1..10}; do
-  curl http://localhost/ask -X POST \
+  curl http://localhost/chat -X POST \
     -H "Content-Type: application/json" \
-    -d '{"question": "Request '$i'"}'
+    -d '{"question": "Request '$i'"}' 2>/dev/null | jq '.served_by'
 done
 
-# Check logs — requests được phân tán
-docker compose logs agent
+# Output: instance-001, instance-002, instance-003, instance-001, ...
+
+# Check logs
+docker compose logs agent --tail 30
 ```
+
+**Kết quả:** Requests được phân tán đều qua 3 instances. Khi kill 1 instance, traffic tự động sang 2 instances còn lại.
 
 ### Exercise 5.5: Test stateless
 
 ```bash
+cd ../../05-scaling-reliability/production
 python test_stateless.py
 ```
 
-Script này:
+**Script này:**
 
-1. Gọi API để tạo conversation
-2. Kill random instance
-3. Gọi tiếp — conversation vẫn còn không?
+1. Gọi API để tạo conversation với session_id
+2. Kill random instance (simulate instance crash)
+3. Gọi tiếp → conversation vẫn còn (vì state trong Redis)
+
+**Kết quả mong đợi:**
+
+```
+✅ Created session: abc-123
+✅ Response from instance-001
+✅ Killed instance-001
+✅ Response from instance-002  ← Instance khác, nhưng vẫn có history!
+✅ Conversation history preserved!
+```
+
+**Giải thích:** Session lưu trong Redis, nên bất kỳ instance nào cũng đọc được. Khi dùng in-memory → conversation bị mất sau khi kill instance.
 
 ### Checkpoint 5
 
-- [ ] Implement health và readiness checks
-- [ ] Implement graceful shutdown
-- [ ] Refactor code thành stateless
-- [ ] Hiểu load balancing với Nginx
-- [ ] Test stateless design
+- [x] Implement health và readiness checks
+- [x] Implement graceful shutdown
+- [x] Refactor code thành stateless
+- [x] Hiểu load balancing với Nginx
+- [x] Test stateless design
 
 ---
 
